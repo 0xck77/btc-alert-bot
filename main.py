@@ -26,48 +26,27 @@ def get_all_symbols():
     r = requests.get("https://fapi.binance.com/fapi/v1/exchangeInfo", timeout=15)
     return sorted([s["symbol"] for s in r.json()["symbols"] if s["quoteAsset"]=="USDT" and s["contractType"]=="PERPETUAL" and s["status"]=="TRADING"])
 
-def get_closed_klines(symbol):
+def get_data(symbol):
     r = requests.get("https://fapi.binance.com/fapi/v1/klines", params={
         "symbol": symbol, "interval": "4h", "limit": 202
     }, timeout=10)
-    data = r.json()
-    closed = data[:-1]  # 去掉未收盘的最后一根
-    return [float(x[4]) for x in closed]
+    # 去掉最后一根未收盘K线
+    data = r.json()[:-1]
+    closes = [float(x[4]) for x in data]
+    return closes
 
-def calc_ema(closes, period):
-    if len(closes) < period:
-        return None
+def calc_ema_list(closes, period):
+    # 返回每根K线对应的EMA值列表
     k = 2/(period+1)
-    ema = closes[0]
+    ema_list = [closes[0]]
     for v in closes[1:]:
-        ema = v*k + ema*(1-k)
-    return ema
-
-def calc_ema_series(closes, period):
-    # 计算最近两根K线的EMA值
-    k = 2/(period+1)
-    ema = closes[0]
-    for v in closes[1:]:
-        ema = v*k + ema*(1-k)
-    return ema
-
-def get_last_two_ema(closes, period):
-    # 分别计算倒数第二根和最后一根K线时的EMA
-    k = 2/(period+1)
-    ema = closes[0]
-    ema_prev = None
-    for i, v in enumerate(closes):
-        if i == len(closes) - 1:
-            ema_last = v*k + ema*(1-k)
-        elif i == len(closes) - 2:
-            ema_prev = ema
-        ema = v*k + ema*(1-k)
-    return ema_prev, ema
+        ema_list.append(v * k + ema_list[-1] * (1-k))
+    return ema_list
 
 def monitor():
     print("币安 USDT永续 4H EMA144 监控启动")
     send_telegram("🤖 <b>监控Bot已启动</b>\n📊 币安全部USDT永续\n⏱ 4H收盘价突破EMA144提醒\n🔄 每10分钟检查一次")
-    alerted = set()  # 已提醒的币，等跌破后重置
+    alerted = set()
 
     while True:
         try:
@@ -78,30 +57,35 @@ def monitor():
 
             for i, sym in enumerate(symbols):
                 try:
-                    closes = get_closed_klines(sym)
-                    if len(closes) < 145:
+                    closes = get_data(sym)
+                    if len(closes) < 150:
                         continue
 
-                    # 用倒数第二根K线算EMA（前一根收盘时的状态）
-                    ema_prev = calc_ema_series(closes[:-1], 144)
-                    # 用最后一根K线算EMA（最新收盘时的状态）
-                    ema_last = calc_ema_series(closes, 144)
+                    ema_list = calc_ema_list(closes, 144)
 
-                    price_prev = closes[-2]  # 前一根收盘价
-                    price_last = closes[-1]  # 最新收盘价
+                    # 最新已收盘K线
+                    price_now = closes[-1]
+                    ema_now   = ema_list[-1]
+                    # 前一根已收盘K线
+                    price_prev = closes[-2]
+                    ema_prev   = ema_list[-2]
 
-                    prev_above = price_prev > ema_prev
-                    last_above = price_last > ema_last
+                    above_now  = price_now  > ema_now
+                    above_prev = price_prev > ema_prev
 
-                    # 从下方突破上方
-                    if not prev_above and last_above:
+                    # 突破：前一根在下方，最新在上方
+                    if above_now and not above_prev:
                         if sym not in alerted:
                             alerted.add(sym)
-                            pct = (price_last - ema_last) / ema_last * 100
-                            triggered.append({"symbol": sym, "price": price_last, "ema": ema_last, "pct": pct})
-
-                    # 跌回下方，重置
-                    if not last_above and sym in alerted:
+                            pct = (price_now - ema_now) / ema_now * 100
+                            triggered.append({
+                                "symbol": sym,
+                                "price": price_now,
+                                "ema": ema_now,
+                                "pct": pct
+                            })
+                    # 跌破：重置
+                    elif not above_now:
                         alerted.discard(sym)
 
                     if i % 20 == 19:
