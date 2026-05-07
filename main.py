@@ -24,19 +24,29 @@ def send_telegram(msg):
 
 def get_all_symbols():
     r = requests.get("https://fapi.binance.com/fapi/v1/exchangeInfo", timeout=15)
-    return sorted([s["symbol"] for s in r.json()["symbols"] if s["quoteAsset"]=="USDT" and s["contractType"]=="PERPETUAL" and s["status"]=="TRADING"])
+    data = r.json()
+    print(f"API响应keys: {list(data.keys())}")
+    symbols = []
+    for s in data.get("symbols", []):
+        try:
+            if s.get("quoteAsset")=="USDT" and s.get("contractType")=="PERPETUAL" and s.get("status")=="TRADING":
+                symbols.append(s["symbol"])
+        except:
+            pass
+    print(f"找到{len(symbols)}个币种")
+    return sorted(symbols)
 
 def get_data(symbol):
     r = requests.get("https://fapi.binance.com/fapi/v1/klines", params={
         "symbol": symbol, "interval": "4h", "limit": 202
     }, timeout=10)
-    # 去掉最后一根未收盘K线
-    data = r.json()[:-1]
-    closes = [float(x[4]) for x in data]
-    return closes
+    data = r.json()
+    if not isinstance(data, list):
+        raise Exception(f"K线数据异常: {data}")
+    closed = data[:-1]
+    return [float(x[4]) for x in closed]
 
 def calc_ema_list(closes, period):
-    # 返回每根K线对应的EMA值列表
     k = 2/(period+1)
     ema_list = [closes[0]]
     for v in closes[1:]:
@@ -53,44 +63,35 @@ def monitor():
             now = datetime.now().strftime("%m-%d %H:%M")
             print(f"\n[{now}] 扫描中...")
             symbols = get_all_symbols()
-            triggered = []
+            if not symbols:
+                print("获取币种列表失败，等待下次")
+                time.sleep(CHECK_INTERVAL)
+                continue
 
+            triggered = []
             for i, sym in enumerate(symbols):
                 try:
                     closes = get_data(sym)
                     if len(closes) < 150:
                         continue
-
                     ema_list = calc_ema_list(closes, 144)
-
-                    # 最新已收盘K线
-                    price_now = closes[-1]
-                    ema_now   = ema_list[-1]
-                    # 前一根已收盘K线
+                    price_now  = closes[-1]
+                    ema_now    = ema_list[-1]
                     price_prev = closes[-2]
                     ema_prev   = ema_list[-2]
-
                     above_now  = price_now  > ema_now
                     above_prev = price_prev > ema_prev
 
-                    # 突破：前一根在下方，最新在上方
                     if above_now and not above_prev:
                         if sym not in alerted:
                             alerted.add(sym)
                             pct = (price_now - ema_now) / ema_now * 100
-                            triggered.append({
-                                "symbol": sym,
-                                "price": price_now,
-                                "ema": ema_now,
-                                "pct": pct
-                            })
-                    # 跌破：重置
+                            triggered.append({"symbol": sym, "price": price_now, "ema": ema_now, "pct": pct})
                     elif not above_now:
                         alerted.discard(sym)
 
                     if i % 20 == 19:
                         time.sleep(0.5)
-
                 except Exception as e:
                     print(f"[{sym}] 错误: {e}")
 
@@ -108,7 +109,7 @@ def monitor():
                 print("无新突破")
 
         except Exception as e:
-            print(f"错误: {e}")
+            print(f"主循环错误: {e}")
 
         time.sleep(CHECK_INTERVAL)
 
