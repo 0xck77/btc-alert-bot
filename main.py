@@ -9,6 +9,10 @@ TELEGRAM_TOKEN   = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 CHECK_INTERVAL = 600
 
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+}
+
 app = Flask(__name__)
 
 @app.route("/")
@@ -23,7 +27,8 @@ def send_telegram(msg):
         print(f"[Telegram失败] {e}")
 
 def get_all_symbols():
-    r = requests.get("https://fapi.binance.com/fapi/v1/exchangeInfo", timeout=15)
+    r = requests.get("https://fapi.binance.com/fapi/v1/exchangeInfo",
+                     headers=HEADERS, timeout=15)
     data = r.json()
     print(f"API响应keys: {list(data.keys())}")
     symbols = []
@@ -37,9 +42,10 @@ def get_all_symbols():
     return sorted(symbols)
 
 def get_data(symbol):
-    r = requests.get("https://fapi.binance.com/fapi/v1/klines", params={
-        "symbol": symbol, "interval": "4h", "limit": 202
-    }, timeout=10)
+    r = requests.get("https://fapi.binance.com/fapi/v1/klines",
+                     headers=HEADERS,
+                     params={"symbol": symbol, "interval": "4h", "limit": 202},
+                     timeout=10)
     data = r.json()
     if not isinstance(data, list):
         raise Exception(f"K线数据异常: {data}")
