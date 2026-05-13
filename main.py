@@ -1,4 +1,4 @@
-# BTC/USDC BOLL(29,2) 5min Telegram alarm bot
+# BTC/USDC BOLL(29,2) 10min Telegram alarm bot (5m×2合并)
 
 import asyncio
 import math
@@ -20,7 +20,7 @@ CHAT_ID   = int(os.environ["TELEGRAM_CHAT_ID"])
 SYMBOL          = "BTCUSDC"
 PERIOD          = 29
 MULT            = 2.0
-CHECK_EVERY     = 300   # 5分钟检查一次
+CHECK_EVERY     = 600   # 10分钟检查一次
 RING_FAST       = 2
 RING_FAST_LIMIT = 60
 RING_SLOW       = 30
@@ -38,11 +38,12 @@ def calc_bb(closes):
 
 
 async def fetch_data():
+    # 5分钟K线80根，每2根合并成1根10分钟K线
     url_k = (
         "https://api.binance.com/api/v3/klines"
         "?symbol=" + SYMBOL +
         "&interval=5m"
-        "&limit=40"
+        "&limit=80"
     )
     url_p = "https://api.binance.com/api/v3/ticker/price?symbol=" + SYMBOL
     timeout = aiohttp.ClientTimeout(total=15)
@@ -56,9 +57,17 @@ async def fetch_data():
         if "price" not in pd:
             raise ValueError("Invalid price: " + str(pd)[:100])
 
-    closes = [float(k[4]) for k in klines[:-1]]  # 去掉最后未完成K线
+    # 去掉最后一根未完成K线
+    complete = klines[:-1]
+    # 每2根5m合并为1根10m，取第2根收盘价
+    closes_10m = []
+    for i in range(0, len(complete) - len(complete) % 2, 2):
+        group = complete[i:i+2]
+        if len(group) == 2:
+            closes_10m.append(float(group[-1][4]))
+
     price = float(pd["price"])
-    return price, calc_bb(closes)
+    return price, calc_bb(closes_10m)
 
 
 async def send_alarm_msg(bot, alarm_type, price, band):
@@ -71,7 +80,7 @@ async def send_alarm_msg(bot, alarm_type, price, band):
         body = "当前价格 $" + "{:,.2f}".format(price) + " / 下轨 $" + "{:,.2f}".format(band)
 
     text = (
-        "⚠️ BOLL(29,2) 5min 警报\n\n"
+        "⚠️ BOLL(29,2) 10min 警报\n\n"
         + head + "\n"
         + body + "\n\n"
         + "触发时间: " + now + "\n"
@@ -150,7 +159,7 @@ async def dismiss_callback(update, context):
 async def start_cmd(update, context):
     await update.message.reply_text(
         "✅ BTC/USDC 布林带警报Bot运行中！\n\n"
-        "监控: BOLL(29,2) 5分钟K线\n"
+        "监控: BOLL(29,2) 10分钟K线\n"
         "发送 /status 查看当前上下轨数值\n"
         "发送 /stop 强制停止警报"
     )
@@ -176,7 +185,7 @@ async def status_cmd(update, context):
         pos = "轨道内 " + str(round(pct)) + "% 位置"
 
     await update.message.reply_text(
-        "📊 BTC/USDC 当前状态 (5min K线)\n\n"
+        "📊 BTC/USDC 当前状态 (10min K线)\n\n"
         + "价格:  $" + "{:,.2f}".format(price) + "\n"
         + "上轨:  $" + "{:,.2f}".format(upper) + "\n"
         + "中轨:  $" + "{:,.2f}".format(middle) + "\n"
@@ -202,7 +211,7 @@ def main():
 
     app.job_queue.run_repeating(check_job, interval=CHECK_EVERY, first=15)
 
-    logger.info("Bot started. BTCUSDC BOLL(29,2) 5min K线 every 5min.")
+    logger.info("Bot started. BTCUSDC BOLL(29,2) 10min K线 every 10min.")
     app.run_polling(drop_pending_updates=True)
 
 
