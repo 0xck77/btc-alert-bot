@@ -1,4 +1,4 @@
-# BTC/USDC BOLL(29,2) 10min Telegram alarm bot (5m×2合并)
+# BTC/USDC BOLL(29,2) 10min Telegram alarm bot
 
 import asyncio
 import math
@@ -6,6 +6,7 @@ import logging
 import os
 from datetime import datetime
 
+import httpx
 import aiohttp
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler
@@ -20,7 +21,7 @@ CHAT_ID   = int(os.environ["TELEGRAM_CHAT_ID"])
 SYMBOL          = "BTCUSDC"
 PERIOD          = 29
 MULT            = 2.0
-CHECK_EVERY     = 600   # 10分钟检查一次
+CHECK_EVERY     = 600
 RING_FAST       = 2
 RING_FAST_LIMIT = 60
 RING_SLOW       = 30
@@ -57,9 +58,7 @@ async def fetch_data():
         if "price" not in pd:
             raise ValueError("Invalid price: " + str(pd)[:100])
 
-    # 去掉最后一根未完成K线
     complete = klines[:-1]
-    # 每2根5m合并为1根10m，取第2根收盘价
     closes_10m = []
     for i in range(0, len(complete) - len(complete) % 2, 2):
         group = complete[i:i+2]
@@ -201,6 +200,17 @@ async def stop_cmd(update, context):
 
 
 def main():
+    # 启动前清除webhook和冲突
+    try:
+        httpx.get(
+            "https://api.telegram.org/bot" + BOT_TOKEN + "/deleteWebhook",
+            params={"drop_pending_updates": "true"},
+            timeout=10
+        )
+        logger.info("Webhook cleared.")
+    except Exception as e:
+        logger.warning("Failed to clear webhook: " + str(e))
+
     request = HTTPXRequest(connection_pool_size=8, read_timeout=30, write_timeout=30, connect_timeout=30)
     app = Application.builder().token(BOT_TOKEN).request(request).build()
 
@@ -212,7 +222,10 @@ def main():
     app.job_queue.run_repeating(check_job, interval=CHECK_EVERY, first=15)
 
     logger.info("Bot started. BTCUSDC BOLL(29,2) 10min K线 every 10min.")
-    app.run_polling(drop_pending_updates=True)
+    app.run_polling(
+        drop_pending_updates=True,
+        allowed_updates=["message", "callback_query"]
+    )
 
 
 if __name__ == "__main__":
