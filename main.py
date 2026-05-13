@@ -20,11 +20,11 @@ CHAT_ID   = int(os.environ["TELEGRAM_CHAT_ID"])
 SYMBOL          = "BTCUSDC"
 PERIOD          = 29
 MULT            = 2.0
-CHECK_EVERY     = 600   # 10分钟检查一次
-KLINE_INTERVAL  = "10m" # 与币安10分钟K线一致
-RING_FAST       = 2     # 前60秒每2秒响
+CHECK_EVERY     = 600
+KLINE_INTERVAL  = "10m"
+RING_FAST       = 2
 RING_FAST_LIMIT = 60
-RING_SLOW       = 30    # 之后每30秒
+RING_SLOW       = 30
 
 alarm_active = False
 
@@ -39,42 +39,59 @@ def calc_bb(closes):
 
 
 async def fetch_data():
-    url_k = (
-        "https://fapi.binance.com/fapi/v1/klines"
-        "?symbol=" + SYMBOL +
-        "&interval=" + KLINE_INTERVAL +
-        "&limit=40"
-    )
-    url_p = "https://fapi.binance.com/fapi/v1/ticker/price?symbol=" + SYMBOL
+    # 先试期货API，失败则用现货API
+    urls = [
+        (
+            "https://fapi.binance.com/fapi/v1/klines?symbol=" + SYMBOL + "&interval=" + KLINE_INTERVAL + "&limit=40",
+            "https://fapi.binance.com/fapi/v1/ticker/price?symbol=" + SYMBOL
+        ),
+        (
+            "https://api.binance.com/api/v3/klines?symbol=" + SYMBOL + "&interval=" + KLINE_INTERVAL + "&limit=40",
+            "https://api.binance.com/api/v3/ticker/price?symbol=" + SYMBOL
+        ),
+    ]
     timeout = aiohttp.ClientTimeout(total=15)
+    last_err = None
     async with aiohttp.ClientSession(timeout=timeout) as session:
-        async with session.get(url_k) as r:
-            klines = await r.json()
-        async with session.get(url_p) as r:
-            pd = await r.json()
-    closes = [float(k[4]) for k in klines]
-    price = float(pd["price"])
-    return price, calc_bb(closes)
+        for url_k, url_p in urls:
+            try:
+                async with session.get(url_k) as r:
+                    klines = await r.json()
+                # 检查返回是否是列表（正常K线数据）
+                if not isinstance(klines, list) or len(klines) == 0:
+                    raise ValueError("Invalid klines response: " + str(klines)[:100])
+                async with session.get(url_p) as r:
+                    pd = await r.json()
+                if "price" not in pd:
+                    raise ValueError("Invalid price response: " + str(pd)[:100])
+                closes = [float(k[4]) for k in klines]
+                price = float(pd["price"])
+                return price, calc_bb(closes)
+            except Exception as e:
+                last_err = e
+                logger.warning("API attempt failed: " + str(e))
+                continue
+    raise Exception("All APIs failed: " + str(last_err))
 
 
 async def send_alarm_msg(bot, alarm_type, price, band):
     now = datetime.now().strftime("%H:%M:%S")
     if alarm_type == "upper":
-        head = "BTC/USDC 突破布林上轨"
+        head = "BTC/USDC 突破布林上轨 🔴"
         body = "当前价格 $" + "{:,.2f}".format(price) + " / 上轨 $" + "{:,.2f}".format(band)
     else:
-        head = "BTC/USDC 跌破布林下轨"
+        head = "BTC/USDC 跌破布林下轨 🟢"
         body = "当前价格 $" + "{:,.2f}".format(price) + " / 下轨 $" + "{:,.2f}".format(band)
 
     text = (
-        "BOLL(29,2) 10min 警报\n\n"
+        "⚠️ BOLL(29,2) 10min 警报\n\n"
         + head + "\n"
         + body + "\n\n"
         + "触发时间: " + now + "\n"
         + "前60秒每2秒提醒，之后每30秒"
     )
     kb = InlineKeyboardMarkup([[
-        InlineKeyboardButton("OK 关闭警报", callback_data="dismiss")
+        InlineKeyboardButton("✅ OK 关闭警报", callback_data="dismiss")
     ]])
     await bot.send_message(chat_id=CHAT_ID, text=text, reply_markup=kb)
 
@@ -138,29 +155,41 @@ async def dismiss_callback(update, context):
     query = update.callback_query
     await query.answer("警报已关闭")
     try:
-        await query.edit_message_text(query.message.text + "\n\n[已关闭]")
+        await query.edit_message_text(query.message.text + "\n\n✅ [已关闭]")
     except Exception:
         pass
+
+
+async def start_cmd(update, context):
+    await update.message.reply_text(
+        "✅ BTC/USDC 布林带警报Bot运行中！\n\n"
+        "监控: BOLL(29,2) 10分钟K线\n"
+        "发送 /status 查看当前上下轨数值\n"
+        "发送 /stop 强制停止警报"
+    )
 
 
 async def status_cmd(update, context):
     try:
         price, bb = await fetch_data()
+        if bb is None:
+            await update.message.reply_text("K线数据不足，请稍后再试。")
+            return
         upper, middle, lower = bb
     except Exception as e:
         await update.message.reply_text("查询失败: " + str(e))
         return
 
     if price >= upper:
-        pos = "高于上轨"
+        pos = "⚠️ 高于上轨！"
     elif price <= lower:
-        pos = "低于下轨"
+        pos = "⚠️ 低于下轨！"
     else:
         pct = (price - lower) / (upper - lower) * 100
         pos = "轨道内 " + str(round(pct)) + "% 位置"
 
     await update.message.reply_text(
-        "BTC/USDC 当前状态 (10min K线)\n\n"
+        "📊 BTC/USDC 当前状态 (10min K线)\n\n"
         + "价格:  $" + "{:,.2f}".format(price) + "\n"
         + "上轨:  $" + "{:,.2f}".format(upper) + "\n"
         + "中轨:  $" + "{:,.2f}".format(middle) + "\n"
@@ -172,14 +201,14 @@ async def status_cmd(update, context):
 async def stop_cmd(update, context):
     global alarm_active
     alarm_active = False
-    await update.message.reply_text("警报已强制停止。")
+    await update.message.reply_text("🛑 警报已强制停止。")
 
 
 def main():
-    # 增加连接超时，改善Railway到Telegram的网络延迟
     request = HTTPXRequest(connection_pool_size=8, read_timeout=30, write_timeout=30, connect_timeout=30)
     app = Application.builder().token(BOT_TOKEN).request(request).build()
 
+    app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("status", status_cmd))
     app.add_handler(CommandHandler("stop", stop_cmd))
     app.add_handler(CallbackQueryHandler(dismiss_callback, pattern="^dismiss$"))
