@@ -7,7 +7,7 @@ import os
 from datetime import datetime
 
 import aiohttp
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 from telegram.request import HTTPXRequest
 
@@ -20,11 +20,11 @@ CHAT_ID   = int(os.environ["TELEGRAM_CHAT_ID"])
 SYMBOL          = "BTCUSDC"
 PERIOD          = 29
 MULT            = 2.0
-CHECK_EVERY     = 600   # 10分钟检查一次
-KLINE_INTERVAL  = "10m" # 与币安10分钟K线一致
-RING_FAST       = 2     # 前60秒每2秒响
+CHECK_EVERY     = 600
+KLINE_INTERVAL  = "10m"
+RING_FAST       = 2
 RING_FAST_LIMIT = 60
-RING_SLOW       = 30    # 之后每30秒
+RING_SLOW       = 30
 
 alarm_active = False
 
@@ -175,9 +175,23 @@ async def stop_cmd(update, context):
     await update.message.reply_text("警报已强制停止。")
 
 
+async def clear_old_connection():
+    bot = Bot(token=BOT_TOKEN)
+    await bot.delete_webhook(drop_pending_updates=True)
+    await bot.close()
+    logger.info("Old connection cleared.")
+
+
 def main():
-    # 增加连接超时，改善Railway到Telegram的网络延迟
-    request = HTTPXRequest(connection_pool_size=8, read_timeout=30, write_timeout=30, connect_timeout=30)
+    # 启动前先清除旧连接，解决 Conflict 问题
+    asyncio.get_event_loop().run_until_complete(clear_old_connection())
+
+    request = HTTPXRequest(
+        connection_pool_size=8,
+        read_timeout=30,
+        write_timeout=30,
+        connect_timeout=30
+    )
     app = Application.builder().token(BOT_TOKEN).request(request).build()
 
     app.add_handler(CommandHandler("status", status_cmd))
@@ -187,7 +201,10 @@ def main():
     app.job_queue.run_repeating(check_job, interval=CHECK_EVERY, first=15)
 
     logger.info("Bot started. BTCUSDC BOLL(29,2) 10min K线 every 10min.")
-    app.run_polling(drop_pending_updates=True)
+    app.run_polling(
+        drop_pending_updates=True,
+        allowed_updates=["message", "callback_query"]
+    )
 
 
 if __name__ == "__main__":
