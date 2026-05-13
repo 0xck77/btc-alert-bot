@@ -8,7 +8,7 @@ from datetime import datetime
 
 import aiohttp
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
+from telegram.ext import Application, CallbackQueryHandler, CommandHandler
 from telegram.request import HTTPXRequest
 
 logging.basicConfig(format="%(asctime)s [%(levelname)s] %(message)s", level=logging.INFO)
@@ -21,7 +21,6 @@ SYMBOL          = "BTCUSDC"
 PERIOD          = 29
 MULT            = 2.0
 CHECK_EVERY     = 600
-KLINE_INTERVAL  = "10m"
 RING_FAST       = 2
 RING_FAST_LIMIT = 60
 RING_SLOW       = 30
@@ -39,39 +38,35 @@ def calc_bb(closes):
 
 
 async def fetch_data():
-    # 先试期货API，失败则用现货API
-    urls = [
-        (
-            "https://fapi.binance.com/fapi/v1/klines?symbol=" + SYMBOL + "&interval=" + KLINE_INTERVAL + "&limit=40",
-            "https://fapi.binance.com/fapi/v1/ticker/price?symbol=" + SYMBOL
-        ),
-        (
-            "https://api.binance.com/api/v3/klines?symbol=" + SYMBOL + "&interval=" + KLINE_INTERVAL + "&limit=40",
-            "https://api.binance.com/api/v3/ticker/price?symbol=" + SYMBOL
-        ),
-    ]
+    # 抓1分钟K线320根，手动合并成10分钟K线
+    url_k = (
+        "https://api.binance.com/api/v3/klines"
+        "?symbol=" + SYMBOL +
+        "&interval=1m"
+        "&limit=320"
+    )
+    url_p = "https://api.binance.com/api/v3/ticker/price?symbol=" + SYMBOL
     timeout = aiohttp.ClientTimeout(total=15)
-    last_err = None
     async with aiohttp.ClientSession(timeout=timeout) as session:
-        for url_k, url_p in urls:
-            try:
-                async with session.get(url_k) as r:
-                    klines = await r.json()
-                # 检查返回是否是列表（正常K线数据）
-                if not isinstance(klines, list) or len(klines) == 0:
-                    raise ValueError("Invalid klines response: " + str(klines)[:100])
-                async with session.get(url_p) as r:
-                    pd = await r.json()
-                if "price" not in pd:
-                    raise ValueError("Invalid price response: " + str(pd)[:100])
-                closes = [float(k[4]) for k in klines]
-                price = float(pd["price"])
-                return price, calc_bb(closes)
-            except Exception as e:
-                last_err = e
-                logger.warning("API attempt failed: " + str(e))
-                continue
-    raise Exception("All APIs failed: " + str(last_err))
+        async with session.get(url_k) as r:
+            klines = await r.json()
+        if not isinstance(klines, list) or len(klines) == 0:
+            raise ValueError("Invalid klines: " + str(klines)[:100])
+        async with session.get(url_p) as r:
+            pd = await r.json()
+        if "price" not in pd:
+            raise ValueError("Invalid price: " + str(pd)[:100])
+
+    # 去掉最后一根未完成K线，每10根合并为一根10m K线
+    complete = klines[:-1]
+    closes_10m = []
+    for i in range(0, len(complete) - len(complete) % 10, 10):
+        group = complete[i:i+10]
+        if len(group) == 10:
+            closes_10m.append(float(group[-1][4]))
+
+    price = float(pd["price"])
+    return price, calc_bb(closes_10m)
 
 
 async def send_alarm_msg(bot, alarm_type, price, band):
