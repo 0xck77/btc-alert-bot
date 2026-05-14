@@ -22,8 +22,8 @@ SYMBOL          = "BTCUSDC"
 PERIOD          = 29
 MULT            = 2.0
 CHECK_EVERY     = 600
-RING_FAST       = 10   # ✅ 前2分钟每10秒一次
-RING_FAST_LIMIT = 120  # ✅ 快速提醒持续120秒（2分钟）
+RING_FAST       = 10   # 前2分钟每10秒一次
+RING_FAST_LIMIT = 120  # 快速提醒持续120秒（2分钟）
 RING_SLOW       = 30   # 之后每30秒一次
 
 alarm_active = False
@@ -82,7 +82,7 @@ async def send_alarm_msg(bot, alarm_type, price, band):
         + head + "\n"
         + body + "\n\n"
         + "触发时间: " + now + "\n"
-        + "前2分钟每10秒提醒，之后每30秒"  # ✅ 更新说明文字
+        + "前2分钟每10秒提醒，之后每30秒"
     )
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ OK 关闭警报", callback_data="dismiss")
@@ -220,10 +220,7 @@ def main():
     app.job_queue.run_repeating(check_job, interval=CHECK_EVERY, first=15)
 
     logger.info("Bot started. BTCUSDC BOLL(29,2) 10min K线 every 10min.")
-    app.run_polling(
-        drop_pending_updates=True,
-        allowed_updates=["message", "callback_query"]
-    )
+    app.run_polling(drop_pending_updates=True)  # ✅ 修复崩溃
 
 
 if __name__ == "__main__":
