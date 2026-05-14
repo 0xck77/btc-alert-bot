@@ -22,9 +22,9 @@ SYMBOL          = "BTCUSDC"
 PERIOD          = 29
 MULT            = 2.0
 CHECK_EVERY     = 600
-RING_FAST       = 2
-RING_FAST_LIMIT = 60
-RING_SLOW       = 30
+RING_FAST       = 10   # ✅ 前2分钟每10秒一次
+RING_FAST_LIMIT = 120  # ✅ 快速提醒持续120秒（2分钟）
+RING_SLOW       = 30   # 之后每30秒一次
 
 alarm_active = False
 
@@ -39,7 +39,6 @@ def calc_bb(closes):
 
 
 async def fetch_data():
-    # 5分钟K线80根，每2根合并成1根10分钟K线
     url_k = (
         "https://api.binance.com/api/v3/klines"
         "?symbol=" + SYMBOL +
@@ -83,7 +82,7 @@ async def send_alarm_msg(bot, alarm_type, price, band):
         + head + "\n"
         + body + "\n\n"
         + "触发时间: " + now + "\n"
-        + "前60秒每2秒提醒，之后每30秒"
+        + "前2分钟每10秒提醒，之后每30秒"  # ✅ 更新说明文字
     )
     kb = InlineKeyboardMarkup([[
         InlineKeyboardButton("✅ OK 关闭警报", callback_data="dismiss")
@@ -200,7 +199,6 @@ async def stop_cmd(update, context):
 
 
 def main():
-    # 启动前清除webhook和冲突
     try:
         httpx.get(
             "https://api.telegram.org/bot" + BOT_TOKEN + "/deleteWebhook",
